@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""cocotb tests for TMAC. Every check is bit-exact against tmac_model.TMAC.
+"""cocotb tests for TMAC2. Every check is bit-exact against tmac_model.TMAC / TMAC2.
 
 The SPI master below drives the pins the way the devkit's RP2040 will:
 mode 0, MSB first, SCK half-period = HALF clk cycles (f_SCK = f_clk / 16),
 sampling MISO just before each rising edge.
+
+The flash tests run a behavioural W25Q128JV (FlashModel) on the uio pins. It
+answers only Fast Read Quad Output (6Bh), checks the command protocol, and
+models the pad/mux round trip: after each SCK fall the data lines carry
+garbage from t_hold until t_valid, so sampling outside the valid window fails.
 
 GATES=yes runs the same tests on the hardened netlist. The 24-bit internal
 saturation test needs ~6,600 transactions; it runs in RTL only (see SLOW).
@@ -14,10 +19,12 @@ import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge
+from cocotb.triggers import ClockCycles, FallingEdge, Timer
+from cocotb.utils import get_sim_time
 
-from tmac_model import (ACC_MAX, ACC_MIN, BIST_ITERS, COLS, NBYTES, ROWS, TMAC,
-                        bist_expected, decode, pack_matrix, sat16_shift)
+from tmac_model import (ACC_MAX, ACC_MIN, BIST_ITERS, COLS, FLASH_ERASED, NBYTES, ROWS,
+                        TMAC, TMAC2, bist_expected, decode, pack_matrix, pack_stream,
+                        sat16_shift)
 
 HALF = 8                                   # clk cycles per SCK phase
 GL = os.environ.get("GATES") == "yes"
@@ -25,8 +32,9 @@ GL = os.environ.get("GATES") == "yes"
 OP_STATUS, OP_LOAD_W, OP_LOAD_A, OP_LOAD_AC = 0x00, 0x10, 0x20, 0x21
 OP_CMP, OP_CMP_CLR, OP_READ_A, OP_READ_R = 0x30, 0x31, 0x40, 0x41
 OP_READ_W, OP_BIST, OP_READ_S, OP_CLEAR, OP_SHIFT = 0x50, 0x60, 0x61, 0x70, 0x80
+OP_LOAD_FC, OP_FCFG, OP_FSTART, OP_FSTOP, OP_FSTAT = 0x22, 0x90, 0x91, 0x92, 0x93
 
-UO_MISO, UO_DONE, UO_PASS, UO_ILL, UO_SAT, UO_BUSY, UO_ACT = 0, 2, 3, 4, 5, 6, 7
+UO_MISO, UO_FRDY, UO_DONE, UO_PASS, UO_ILL, UO_SAT, UO_BUSY, UO_ACT = 0, 1, 2, 3, 4, 5, 6, 7
 
 
 # ---------------- pin-level helpers ----------------
@@ -363,3 +371,279 @@ async def test_spi_abort_and_reset(dut):
     m.reset()
     assert await read_codes(dut) == m.weight_codes()
     await check_all(dut, m, "after mid-transaction reset")
+
+
+# ================= v2: QSPI flash weight stream =================
+class FlashModel:
+    """Behavioural W25Q128JV on the TT QSPI Pmod pins (uio[0] /CS, [1] IO0, [2] IO1,
+    [3] SCK, [4] IO2, [5] IO3). Fast Read Quad Output (6Bh) only. Protocol errors are
+    collected in .errors; every flash test asserts it is empty."""
+
+    IO_BITS = (1, 2, 4, 5)                 # uio bit for IO0..IO3
+
+    def __init__(self, dut, image, t_valid=26.0, t_hold=2.0, seed=1):
+        self.dut, self.image = dut, dict(image)
+        self.t_valid, self.t_hold = t_valid, t_hold
+        self.rng = random.Random(seed)
+        self.errors, self.commands = [], []
+        self.uio_in = 0
+        self.t_desel = None
+        self.task = cocotb.start_soon(self._run())
+
+    def _drive(self, nib):
+        v = self.uio_in
+        for k, bit in enumerate(self.IO_BITS):
+            v = (v & ~(1 << bit)) | (((nib >> k) & 1) << bit)
+        self.uio_in = v
+        self.dut.uio_in.value = v
+
+    async def _later(self, delay, nib):
+        await Timer(delay, unit="ns")
+        self._drive(nib)
+
+    async def _run(self):
+        dut = self.dut
+        # Start from the pins as they are now. (Taking the first *change* as the
+        # baseline swallowed a /CS fall when FSTART was the first command.)
+        vo = dut.uio_out.value
+        prev = (int(vo) & 1, (int(vo) >> 3) & 1) if vo.is_resolvable else None
+        sel = False
+        while True:
+            await dut.uio_out.value_change
+            vo = dut.uio_out.value
+            ve = dut.uio_oe.value
+            if not (vo.is_resolvable and ve.is_resolvable):
+                continue
+            out, oe = int(vo), int(ve)
+            csn, sck, io0 = out & 1, (out >> 3) & 1, (out >> 1) & 1
+            if prev is None:
+                prev = (csn, sck)
+                continue
+            pcsn, psck = prev
+            prev = (csn, sck)
+            if (oe & 0b11001001) != 0b11001001:
+                self.errors.append(f"/CS, SCK or a RAM /CS not driven (oe 0x{oe:02x})")
+            if ((out >> 6) & 3) != 3:
+                self.errors.append("a PSRAM /CS went low")
+            if pcsn != csn:
+                now = get_sim_time("ns")
+                if sck:
+                    self.errors.append("SCK high on a /CS edge (not mode 0)")
+                if csn == 0:
+                    sel, self.nbits, self.sreg, self.falls = True, 0, 0, 0
+                    if self.t_desel is not None and now - self.t_desel < 10:
+                        self.errors.append("/CS high for < 10 ns between commands (tSHSL1)")
+                else:
+                    sel = False
+                    self.t_desel = now
+                continue
+            if not sel or psck == sck:
+                continue
+            if sck:                            # rising edge: the flash samples IO0
+                if self.nbits < 32:
+                    if not (oe >> 1) & 1:
+                        self.errors.append(f"IO0 not driven at command bit {self.nbits}")
+                    self.sreg = (self.sreg << 1) | io0
+                    self.nbits += 1
+                    if self.nbits == 32:
+                        cmd, addr = self.sreg >> 24, self.sreg & 0xFFFFFF
+                        self.commands.append((cmd, addr))
+                        if cmd != 0x6B:
+                            self.errors.append(f"unexpected instruction 0x{cmd:02x}")
+                        self.addr = addr
+            else:                              # falling edge: the flash shifts out
+                self.falls += 1
+                if self.falls >= 40:
+                    if (oe >> 1) & 1:
+                        self.errors.append("IO0 still driven by the chip during data out")
+                    n = self.falls - 40
+                    byte = self.image.get(self.addr + n // 2, FLASH_ERASED)
+                    nib = (byte >> 4) if n % 2 == 0 else (byte & 0xF)
+                    cocotb.start_soon(self._later(self.t_hold, self.rng.randrange(16)))
+                    cocotb.start_soon(self._later(self.t_valid, nib))
+
+
+async def fstat(dut):
+    rx = await xfer(dut, [OP_FSTAT], 2)
+    return rx[1], rx[2]
+
+
+async def wait_ready(dut, limit=20000):
+    for _ in range(limit // 16):
+        if uo_bit(dut, UO_FRDY):
+            return
+        await ClockCycles(dut.clk, 16)
+    raise AssertionError("FLASH_READY never rose")
+
+
+async def check_flash(dut, m, tag=""):
+    await check_all(dut, m, tag)
+    st, cfg = await fstat(dut)
+    assert st == m.fstat(), f"{tag}: FSTAT 0x{st:02x} != model 0x{m.fstat():02x}"
+    assert cfg == m.fcfg(), f"{tag}: FCFG 0x{cfg:02x} != model 0x{m.fcfg():02x}"
+    assert uo_bit(dut, UO_FRDY) == int(m.f_ready), f"{tag}: FLASH_READY pin"
+
+
+def rand_matrix(rng, n, k, p_zero=1 / 3):
+    return [[0 if rng.random() < p_zero else rng.choice((-1, 1)) for _ in range(k)] for _ in range(n)]
+
+
+def image_at(page, data):
+    return {(page << 8) + i: b for i, b in enumerate(data)}
+
+
+async def run_matvec(dut, m, flash, W, x, page, tag):
+    """y = W x through the flash stream: one FSTART, then per row group CLEAR, LOAD_FC, read."""
+    _, groups, chunks = pack_stream(W)
+    xp = [v & 0xFF for v in x] + [0] * (chunks * COLS - len(x))
+    await xfer(dut, [OP_FSTART, page >> 8, page & 0xFF])
+    m.fstart(page)
+    await wait_ready(dut)
+    ys = []
+    for g in range(groups):
+        await xfer(dut, [OP_CLEAR])
+        m.clear()
+        await xfer(dut, [OP_LOAD_FC] + xp)
+        m.load_fc(xp)
+        await wait_ready(dut)
+        await check_flash(dut, m, f"{tag} group {g}")
+        ys += m.acc
+    for i, row in enumerate(W):                      # the model against plain arithmetic
+        assert ys[i] == sum(w * v for w, v in zip(row, x)), f"{tag}: model row {i}"
+    assert not flash.errors, f"{tag}: flash protocol: {flash.errors[:3]}"
+    return ys
+
+
+@cocotb.test()
+async def test_flash_pins_reset(dut):
+    """After reset: flash /CS and both PSRAM /CS driven high, SCK low, IO0 released,
+    FSTAT shows a closed stream and the default config (/4, sample 2 clk)."""
+    await start(dut)
+    m = TMAC2()
+    assert int(dut.uio_oe.value) == 0b11001001, f"uio_oe 0x{int(dut.uio_oe.value):02x}"
+    assert int(dut.uio_out.value) & 0b11001001 == 0b11000001, f"uio_out 0x{int(dut.uio_out.value):02x}"
+    await check_flash(dut, m, "reset")
+
+
+@cocotb.test()
+async def test_flash_matvec(dut):
+    """Matrix-vector products with weights streamed from flash, ragged N and K (padding),
+    at every SCK divider; FSTART is issued right before LOAD_FC, so at the slow dividers
+    the first compute has to wait for its weights."""
+    await start(dut)
+    rng = random.Random(42)
+    shapes = [(8, 10), (10, 13), (4, 5)] if not GL else [(6, 7)]
+    divs = (1, 0, 2, 3) if not GL else (1, 3)
+    image, plan, page = {}, [], 0x0012
+    for n, k in shapes:
+        W = rand_matrix(rng, n, k)
+        data, _, _ = pack_stream(W)
+        image.update(image_at(page, data))
+        plan.append((W, page))
+        page += (len(data) + 255) // 256
+    flash = FlashModel(dut, image)
+    m = TMAC2(image)
+    for div in divs:
+        samp = 1 if div < 3 else 3                # 40 ns, or 80 ns at /16
+        await xfer(dut, [OP_FCFG, samp << 2 | div])
+        m.f_div, m.f_samp = div, samp
+        for W, pg in plan:
+            x = [rng.choice((-128, 127)) if rng.random() < 0.2 else rng.randint(-128, 127) for _ in W[0]]
+            await run_matvec(dut, m, flash, W, x, pg, f"div {div} {len(W)}x{len(W[0])}")
+    assert [c for c, _ in flash.commands] == [0x6B] * len(flash.commands)
+
+
+# (div, samp, t_valid ns): sample time = (samp+1)*20 ns after the clock that drops SCK.
+# It must be >= t_valid and < one SCK period + t_hold (2 ns), or the garbage is sampled.
+TIMING_CASES = [(0, 0, 26.0), (0, 1, 26.0), (0, 2, 26.0), (1, 0, 26.0), (1, 1, 26.0),
+                (1, 3, 26.0), (3, 1, 26.0), (0, 0, 10.0), (1, 2, 50.0), (1, 1, 50.0)]
+
+
+@cocotb.test()
+async def test_flash_timing_windows(dut):
+    """The sample-delay setting is what makes the flash readable: for each SCK divider and
+    round-trip delay, exactly the settings predicted by the timing budget read correct weights."""
+    await start(dut)
+    rng = random.Random(5)
+    data = [rng.randrange(243) for _ in range(NBYTES)]
+    for div, samp, t_valid in (TIMING_CASES if not GL else TIMING_CASES[:4]):
+        period = (2 << div) * 20.0
+        expect = t_valid <= (samp + 1) * 20.0 < period + 2.0
+        flash = FlashModel(dut, image_at(1, data), t_valid=t_valid, seed=div * 7 + samp)
+        m = TMAC2(image_at(1, data))
+        await xfer(dut, [OP_FSTOP])
+        await xfer(dut, [OP_FCFG, samp << 2 | div])
+        await xfer(dut, [OP_FSTART, 0, 1])
+        await wait_ready(dut)
+        m.f_div, m.f_samp = div, samp
+        m.fstart(1)
+        ok = await read_codes(dut) == m.weight_codes()
+        flash.task.cancel()
+        assert ok == expect, (f"div {div} samp {samp} t_valid {t_valid}: read {'ok' if ok else 'bad'}, "
+                              f"budget predicts {'ok' if expect else 'bad'}")
+        assert not flash.errors, flash.errors[:3]
+        await xfer(dut, [OP_CLEAR])                # garbage reads may have set ILLEGAL
+
+
+@cocotb.test()
+async def test_flash_wait_and_overrun(dut):
+    """LOAD_FC with no open stream: the compute waits (PEND), accumulators do not change,
+    and the next activation sets the sticky OVERRUN flag. CLEAR clears both."""
+    await start(dut)
+    m = TMAC2()
+    await xfer(dut, [OP_LOAD_FC] + [1] * COLS)
+    st, _ = await fstat(dut)
+    assert st & 0x10 and not st & 0x08, f"after one vector: FSTAT 0x{st:02x}"
+    await xfer(dut, [OP_LOAD_FC, 3])
+    st, _ = await fstat(dut)
+    assert st & 0x18 == 0x18, f"after an extra activation: FSTAT 0x{st:02x}"
+    assert await read_raw(dut) == [0] * ROWS
+    await xfer(dut, [OP_CLEAR])
+    st, _ = await fstat(dut)
+    assert st & 0x18 == 0, f"after CLEAR: FSTAT 0x{st:02x}"
+    m.write_act(0, 3)
+    for i in range(1, COLS):
+        m.write_act(i, 1)
+    await check_flash(dut, m, "after CLEAR")
+
+
+@cocotb.test()
+async def test_flash_stop_restart_bist(dut):
+    """FSTOP closes the stream; FSTART at a new page restarts from that page's first chunk;
+    BIST closes an open stream and still passes; v1 LOAD_W works after the stream closes."""
+    await start(dut)
+    rng = random.Random(9)
+    A, B = rand_matrix(rng, 4, 10), rand_matrix(rng, 4, 10)
+    da, _, _ = pack_stream(A)
+    db, _, _ = pack_stream(B)
+    image = {**image_at(0x0100, da), **image_at(0x0200, db)}
+    flash = FlashModel(dut, image)
+    m = TMAC2(image)
+    x = [rng.randint(-128, 127) for _ in range(10)]
+    await xfer(dut, [OP_FSTART, 0x01, 0x00])
+    m.fstart(0x0100)
+    await wait_ready(dut)
+    await xfer(dut, [OP_LOAD_FC] + [v & 0xFF for v in x[:5]])     # first chunk only
+    m.load_fc([v & 0xFF for v in x[:5]])
+    await wait_ready(dut)
+    await check_flash(dut, m, "A, one chunk")
+    await xfer(dut, [OP_FSTOP])
+    m.fstop()
+    await check_flash(dut, m, "after FSTOP")
+    ys = await run_matvec(dut, m, flash, B, x, 0x0200, "B after restart")
+    assert ys[:4] == [sum(w * v for w, v in zip(row, x)) for row in B]
+    # BIST while the stream is open
+    await xfer(dut, [OP_BIST])
+    while uo_bit(dut, UO_BUSY):
+        await ClockCycles(dut.clk, 16)
+    assert uo_bit(dut, UO_PASS) == 1, "BIST failed with the flash stream open"
+    st, _ = await fstat(dut)
+    assert not st & 0x80, f"BIST left the stream open: FSTAT 0x{st:02x}"
+    # v1 path still works
+    W = rand_weights(rng)
+    await xfer(dut, [OP_LOAD_W] + pack_matrix(W))
+    m2 = TMAC()
+    for i, byte in enumerate(pack_matrix(W)):
+        m2.write_wbyte(i, byte)
+    assert await read_codes(dut) == m2.weight_codes()
+    assert not flash.errors, flash.errors[:3]

@@ -164,10 +164,88 @@ class TMAC:
         return sig
 
 
+# ---------------- v2: weights streamed from QSPI flash ----------------
+FLASH_ERASED = 0xFF                  # an erased flash byte (illegal as a weight byte)
+
+
+def pack_stream(W):
+    """Weight matrix (N x K, entries in {-1,0,+1}) -> flash bytes in the order LOAD_FC consumes them.
+
+    Rows are taken in groups of ROWS (zero rows pad N), K is cut into chunks of COLS (zero columns
+    pad K; the host pads the activations with zeros to match). For each group, for each chunk,
+    one array load = NBYTES bytes in LOAD_W order. Returns (bytes, n_groups, n_chunks)."""
+    n, k = len(W), len(W[0])
+    groups = (n + ROWS - 1) // ROWS
+    chunks = (k + COLS - 1) // COLS
+    out = []
+    for g in range(groups):
+        for c in range(chunks):
+            blk = []
+            for r in range(ROWS):
+                row = W[g * ROWS + r] if g * ROWS + r < n else [0] * k
+                seg = row[c * COLS:(c + 1) * COLS]
+                blk.append(seg + [0] * (COLS - len(seg)))
+            out += pack_matrix(blk)
+    return out, groups, chunks
+
+
+class TMAC2(TMAC):
+    """TMAC plus the flash weight stream (qspi_fetch.v, tt_um_msohair_tmac2.v)."""
+
+    def __init__(self, flash=None):
+        self.flash = dict(flash or {})        # byte address -> value; anything else reads erased
+        super().__init__()
+
+    def reset(self):
+        super().reset()
+        self.f_open = False
+        self.f_ptr = 0
+        self.f_ready = False
+        self.f_pend = False
+        self.f_overrun = False
+        self.f_div, self.f_samp = 1, 1
+
+    def _fetch_chunk(self):
+        for i in range(NBYTES):
+            self.write_wbyte(i, self.flash.get(self.f_ptr + i, FLASH_ERASED))
+        self.f_ptr += NBYTES
+        self.f_ready = True
+
+    def fstart(self, page):
+        self.f_open, self.f_ptr = True, page << 8
+        self.f_pend = self.f_overrun = False
+        self._fetch_chunk()
+
+    def fstop(self):
+        self.f_open = self.f_ready = self.f_pend = self.f_overrun = False
+
+    def load_fc(self, acts):
+        """LOAD_FC with activations that arrive slower than chunks (no overrun)."""
+        for i, b in enumerate(acts):
+            self.write_act(i, b)
+            if i % COLS == COLS - 1:
+                assert self.f_ready, "model: LOAD_FC with no open stream"
+                self.compute(clear=False)
+                self._fetch_chunk()
+
+    def clear(self):
+        super().clear()
+        self.f_pend = self.f_overrun = False
+
+    def fstat(self):
+        """FSTAT byte when the chip is quiet (no fetch in flight)."""
+        busy = self.f_open and not self.f_ready
+        return (self.f_open << 7 | busy << 6 | self.f_ready << 5
+                | self.f_pend << 4 | self.f_overrun << 3 | 0b010)
+
+    def fcfg(self):
+        return self.f_samp << 2 | self.f_div
+
+
 def write_rtl_constants(sig):
     import pathlib
     import re
-    top = pathlib.Path(__file__).resolve().parent.parent / "src" / "tt_um_msohair_tmac.v"
+    top = pathlib.Path(__file__).resolve().parent.parent / "src" / "tt_um_msohair_tmac2.v"
     text = top.read_text()
     block = (
         "  // BEGIN GENERATED BIST CONSTANTS (test/tmac_model.py --write-rtl; do not edit)\n"

@@ -1,9 +1,9 @@
 # Tiny Tapeout project information
 project:
-  title:        "TMAC: ternary (1.58-bit) MAC array"      # Project title
+  title:        "TMAC2: ternary MAC array with QSPI weight streaming"      # Project title
   author:       "Muhammad Sohair Khan"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "4x5 multiplier-free ternary weight-stationary MAC array, base-3 packed weights, 24-bit acc, SPI, BIST"      # One line description of what your project does
+  description:  "4x5 multiplier-free ternary MAC array, 24-bit acc, SPI; streams base-3 packed weights from the QSPI Pmod flash"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     50000000       # Clock frequency in Hz (or 0 if not applicable)
 
@@ -11,17 +11,18 @@ project:
   tiles: "2x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
-  top_module:  "tt_um_msohair_tmac"
+  top_module:  "tt_um_msohair_tmac2"
 
   # List your project's source files here.
   # Source files must be in ./src and you must list each source file separately, one per line.
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
-    - "tt_um_msohair_tmac.v"
+    - "tt_um_msohair_tmac2.v"
     - "tmac_core.v"
     - "tmac_bist.v"
     - "spi_slave.v"
     - "trit_decoder.v"
+    - "qspi_fetch.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
@@ -38,7 +39,7 @@ pinout:
 
   # Outputs
   uo[0]: "MISO"
-  uo[1]: ""
+  uo[1]: "FLASH_READY"
   uo[2]: "BIST_DONE"
   uo[3]: "BIST_PASS"
   uo[4]: "ILLEGAL"
@@ -47,14 +48,14 @@ pinout:
   uo[7]: "SPI_ACTIVE"
 
   # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "FLASH_CS_N"
+  uio[1]: "QSPI_IO0"
+  uio[2]: "QSPI_IO1"
+  uio[3]: "QSPI_SCK"
+  uio[4]: "QSPI_IO2"
+  uio[5]: "QSPI_IO3"
+  uio[6]: "RAM_A_CS_N (held high)"
+  uio[7]: "RAM_B_CS_N (held high)"
 
 # Do not change!
 yaml_version: 6

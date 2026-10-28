@@ -1,7 +1,10 @@
-# TMAC tests
+# TMAC2 tests
 
-`tmac_model.py` is the bit-exact Python reference model. `test.py` drives the chip's pins through a
-cocotb SPI master and compares every observable value with the model.
+`tmac_model.py` is the bit-exact Python reference model (`TMAC` for the v1 datapath, `TMAC2` adds the flash
+stream; `pack_stream` builds flash images). `test.py` drives the chip's pins through a cocotb SPI master and
+compares every observable value with the model. The flash tests add `FlashModel`, a behavioural W25Q128JV on
+the `uio` pins that checks the command protocol and puts random garbage on the data lines between `t_hold`
+and `t_valid` after every SCK fall, so a wrong sample point reads wrong weights instead of passing by luck.
 
 | test | what it proves |
 |---|---|
@@ -14,10 +17,11 @@ cocotb SPI master and compares every observable value with the model.
 | test_internal_saturation | 24-bit clamp and sticky SAT flags (RTL only: ~6,600 transactions) |
 | test_bist | BIST via opcode and pin, signature = model, SPI writes ignored while busy |
 | test_spi_abort_and_reset | a half-sent byte writes nothing; rst_n mid-frame restores the reset state |
-
-Mutation check (6 injected bugs, all caught): ±1 code swap in the decoder (2 tests), logical instead of
-arithmetic shift, missing +1 carry-ins of negated terms, wrapping instead of saturating, LOAD_AC not
-computing.
+| test_flash_pins_reset | flash and both PSRAM /CS driven high, SCK low, IO0 released; FSTAT/FCFG reset values |
+| test_flash_matvec | y = W·x with weights streamed from flash, ragged N and K, all four SCK dividers, protocol checked |
+| test_flash_timing_windows | for 10 (divider, sample delay, round trip) cases, the weights read correctly exactly when the timing budget says they should |
+| test_flash_wait_and_overrun | a compute waits for its weights (PEND); an early activation sets OVERRUN; CLEAR clears both |
+| test_flash_stop_restart_bist | FSTOP, restart at another page, BIST closes the stream and passes, v1 LOAD_W still works |
 
 ## Running on Windows
 
