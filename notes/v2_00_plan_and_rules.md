@@ -30,3 +30,4 @@ progress against these dates at every session handoff.
 | date | status |
 |---|---|
 | 28 Oct | Rules recorded. Spec v2_01 written. |
+| 28 Oct | Flash timing verified against the datasheet (v2_02) before RTL. A's RTL done: RTL 14/14, mutation 10/10 (with control), gate level 14/14 incl. slow test. Repo `Muhammad-Sohair/tt-ternary-mac-v2` created. Hardened at 2x2: 63.8 % util, setup +4.88 ns, hold +0.103 ns, DRC/LVS/antenna 0, reproducible. **Two residuals await the owner's decision** (v2_03): 1 data net +50 ps slew at max_ss only, and clock-root fanout 16 > our limit 8. Not tagged `signoff-a` yet. 17 days to the 14 Nov gate. |
