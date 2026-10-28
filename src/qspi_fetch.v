@@ -67,8 +67,9 @@ module qspi_fetch #(
   reg        sck_q, csn_q, oe_q;
   reg [5:0]  bitn;                         // clocks left in S_CMD / S_DUMMY
   reg [2:0]  hcnt;                         // clk cycles left in this SCK phase
-  reg [3:0]  nib_out;                      // falling edges still to produce in S_DATA
-  reg [3:0]  nib_in;                       // nibbles still to capture
+  localparam NB = $clog2(2 * CHUNK + 1);   // nibble counters hold 0..2*CHUNK
+  reg [NB-1:0] nib_out;                    // falling edges still to produce in S_DATA
+  reg [NB-1:0] nib_in;                     // nibbles still to capture
   reg        hi_half;                      // next captured nibble is a high nibble
   reg [3:0]  hi_nib;
   reg [4:0]  evs;                          // evs[k]: a launching fall happened k clk ago
@@ -79,7 +80,7 @@ module qspi_fetch #(
   wire       fall_now = tick && sck_q;     // SCK goes low at this edge
   // evs[k] is set k clk after the launching edge; in_q then holds the pin
   // value sampled k clk after it. (evs[0] would sample before SCK fell.)
-  wire       grab = evs[samp + 3'd1] && (nib_in != 4'd0);
+  wire       grab = evs[samp + 3'd1] && (nib_in != 0);
 
   // A falling edge in S_DATA launches a nibble. The 8th dummy clock's fall
   // launches the first one, so the count starts there.
@@ -110,8 +111,8 @@ module qspi_fetch #(
       oe_q    <= 1'b0;
       hcnt    <= 3'd0;
       evs     <= 5'd0;
-      nib_out <= 4'd0;
-      nib_in  <= 4'd0;
+      nib_out <= 0;
+      nib_in  <= 0;
       hi_half <= 1'b1;
       waddr   <= 0;
       if (rst) begin bitn <= 6'd0; hi_nib <= 4'd0; end
@@ -123,14 +124,14 @@ module qspi_fetch #(
       oe_q    <= 1'b0;
       hcnt    <= half;
       evs     <= 5'd0;
-      nib_in  <= 4'd0;
+      nib_in  <= 0;
       waddr   <= 0;
     end else begin
       if (hcnt != 3'd0) hcnt <= hcnt - 3'd1;
 
       // capture: one nibble per launching fall, (samp + 1) clk later
       if (grab) begin
-        nib_in  <= nib_in - 4'd1;
+        nib_in  <= nib_in - 1'b1;
         hi_half <= ~hi_half;
         if (hi_half) hi_nib <= in_q;
         else waddr <= (waddr == CHUNK - 1) ? 0 : waddr + 1'b1;
@@ -171,15 +172,15 @@ module qspi_fetch #(
           end
         end
         S_DATA: if (tick) begin
-          if (!sck_q && nib_out == 4'd0) begin
+          if (!sck_q && nib_out == 0) begin
             state <= S_DRAIN;              // all launching falls produced; SCK stays low
           end else begin
             sck_q <= ~sck_q;
             hcnt  <= half;
-            if (sck_q) nib_out <= nib_out - 4'd1;
+            if (sck_q) nib_out <= nib_out - 1'b1;
           end
         end
-        S_DRAIN: if (nib_in == 4'd0) state <= S_HOLD;
+        S_DRAIN: if (nib_in == 0) state <= S_HOLD;
         S_HOLD: if (next) begin
           // Resume the stream. The flash still drives the last nibble; the
           // next rise/fall pair launches the next one.

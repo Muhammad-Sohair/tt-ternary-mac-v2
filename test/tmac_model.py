@@ -11,7 +11,7 @@ It runs unchanged under MicroPython on the devkit (devkit/tmac_bringup.py
 imports it), so the host-only imports live inside the functions that use them.
 """
 
-ROWS, COLS, ACC_W = 4, 5, 24
+ROWS, COLS, ACC_W = 8, 5, 24
 BPR = COLS // 5                     # packed bytes per row
 NBYTES = ROWS * BPR
 ACC_MAX, ACC_MIN = (1 << (ACC_W - 1)) - 1, -(1 << (ACC_W - 1))

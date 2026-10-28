@@ -146,7 +146,7 @@ def s3_hand_example(tt):
     xfer(tt, [0x20] + list(range(1, M.COLS + 1)))
     xfer(tt, [0x31])
     raw = read_raw(tt)
-    want = [M.COLS * (M.COLS + 1) // 2, 0, 0, 0]
+    want = [M.COLS * (M.COLS + 1) // 2] + [0] * (M.ROWS - 1)
     print("S3 hand example: raw", raw, "(want %s)" % want)
     return raw == want
 
@@ -196,7 +196,7 @@ def s5_random(tt, trials=200, seed=1):
 def s6_saturation(tt):
     m = M.TMAC()
     xfer(tt, [0x70])
-    W = [[1] * M.COLS, [-1] * M.COLS, [1] * M.COLS, [0] * M.COLS]
+    W = [[[1] * M.COLS, [-1] * M.COLS, [1] * M.COLS, [0] * M.COLS][r % 4] for r in range(M.ROWS)]
     xfer(tt, [0x10] + M.pack_matrix(W))
     xfer(tt, [0x20] + [127] * M.COLS)
     for i, b in enumerate(M.pack_matrix(W)):
@@ -415,7 +415,7 @@ def f2_hand_example(tt):
     xfer(tt, [0x70])
     xfer(tt, [OP_LOAD_FC] + list(range(1, M.COLS + 1)))
     raw = read_raw(tt)
-    want = [M.COLS * (M.COLS + 1) // 2, 0, 0, 0]
+    want = [M.COLS * (M.COLS + 1) // 2] + [0] * (M.ROWS - 1)
     print("F2 flash hand example: FSTAT after reset %02x %02x (want 02 05), READY=%d, raw" % (st0 + (rdy,)),
           raw, "(want %s)" % want)
     xfer(tt, [OP_FSTOP])
@@ -508,7 +508,7 @@ def f2_rerun(tt, page):
     xfer(tt, [OP_LOAD_FC] + list(range(1, M.COLS + 1)))
     raw = read_raw(tt)
     xfer(tt, [OP_FSTOP])
-    return raw == [M.COLS * (M.COLS + 1) // 2, 0, 0, 0]
+    return raw == [M.COLS * (M.COLS + 1) // 2] + [0] * (M.ROWS - 1)
 
 
 def run_flash(tt, set_qe=False, window_hz=50_000_000):

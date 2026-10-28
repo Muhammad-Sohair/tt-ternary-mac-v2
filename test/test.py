@@ -226,9 +226,9 @@ async def test_shift_floor_semantics(dut):
     """Readout is floor(acc / 2^shift), not truncation: -1 >>> 1 = -1, -3 >>> 1 = -2."""
     await start(dut)
     m = TMAC()
-    # row r has a single +1 weight, in column r, so acc[r] = acts[r] = targets[r]
-    targets = [-1, -3, 5, -128]
-    W = [[1 if c == r else 0 for c in range(COLS)] for r in range(ROWS)]
+    # rows 0-3 have a single +1 weight, in column r, so acc[r] = acts[r] = targets[r]; other rows are 0
+    targets = [-1, -3, 5, -128] + [0] * (ROWS - 4)
+    W = [[1 if c == r and r < 4 else 0 for c in range(COLS)] for r in range(ROWS)]
     acts = [targets[c] if c < ROWS else 0 for c in range(COLS)]
     await xfer(dut, [OP_LOAD_W] + pack_matrix(W))
     await xfer(dut, [OP_LOAD_A] + [x & 0xFF for x in acts])
@@ -254,7 +254,7 @@ async def test_readout_saturation(dut):
     set after a rescale removes the clamp, until CLEAR."""
     await start(dut)
     m = TMAC()
-    W = [[1] * COLS, [-1] * COLS, [1] * COLS, [0] * COLS]
+    W = [[[1] * COLS, [-1] * COLS, [1] * COLS, [0] * COLS][r % 4] for r in range(ROWS)]
     acts = [127] * COLS
     await xfer(dut, [OP_LOAD_W] + pack_matrix(W))
     await xfer(dut, [OP_LOAD_A] + acts)
@@ -285,8 +285,9 @@ async def test_internal_saturation(dut):
     flags instead of wrapping; CLEAR resets them."""
     await start(dut)
     m = TMAC()
-    # per compute: row 0 +127*COLS, rows 1-2 -127*COLS, row 3 about half (control row)
-    W = [[1] * COLS, [-1] * COLS, [-1] * COLS, [1] * (COLS // 2) + [0] * (COLS - COLS // 2)]
+    # per compute: row 0 +127*COLS, rows 1-2 -127*COLS, row 3 about half (control row); repeats every 4 rows
+    W = [[[1] * COLS, [-1] * COLS, [-1] * COLS, [1] * (COLS // 2) + [0] * (COLS - COLS // 2)][r % 4]
+         for r in range(ROWS)]
     acts = [127] * COLS
     await xfer(dut, [OP_LOAD_W] + pack_matrix(W))
     await xfer(dut, [OP_LOAD_A] + [x & 0xFF for x in acts])
@@ -298,7 +299,8 @@ async def test_internal_saturation(dut):
     for _ in range(n):
         await xfer(dut, [OP_CMP])
         m.compute(clear=False)
-    assert m.acc[0] == ACC_MAX and m.acc[1] == ACC_MIN and m.sat_flags[:3] == [True] * 3 and not m.sat_flags[3]
+    assert m.acc[0] == ACC_MAX and m.acc[1] == ACC_MIN
+    assert m.sat_flags == [r % 4 != 3 for r in range(ROWS)]
     await check_all(dut, m, "internal sat")
     assert uo_bit(dut, UO_SAT) == 1
     await xfer(dut, [OP_CLEAR])
