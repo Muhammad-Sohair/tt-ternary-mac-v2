@@ -47,7 +47,8 @@ The `notes/` folder is a log of what happened, including the mistakes:
    theory I had to retract, and every warning explained.
 5. [Silicon test plan](notes/05_silicon_test_plan.md): staged bring-up on the TT devkit, with what each
    failure would mean. The script is [devkit/tmac_bringup.py](devkit/tmac_bringup.py) (MicroPython, reuses
-   the same Python model).
+   the same Python model). For TMAC2 it also programs the QSPI Pmod flash and runs flash stages F1–F5
+   ([notes/v2_04](notes/v2_04_devkit_bringup.md)); `test/test_devkit.py` runs the script against the RTL.
 
 ## Running it (Windows, no WSL or Docker needed)
 

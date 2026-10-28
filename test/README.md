@@ -23,6 +23,17 @@ and `t_valid` after every SCK fall, so a wrong sample point reads wrong weights 
 | test_flash_wait_and_overrun | a compute waits for its weights (PEND); an early activation sets OVERRUN; CLEAR clears both |
 | test_flash_stop_restart_bist | FSTOP, restart at another page, BIST closes the stream and passes, v1 LOAD_W still works |
 
+`test_devkit.py` runs the board script `devkit/tmac_bringup.py` unmodified against the RTL (a cocotb bridge
+thread plus a fake `tt` object with the firmware API the script uses). With project 0 selected, the script
+programs `W25Q`, a bit-level single-SPI W25Q128JV (WREN, sector erase, page program with page wrap, BUSY,
+QE). With TMAC2 selected, `FlashModel` serves the chip's reads from the same memory. Not in the default
+run (about 2 min): `mingw32-make COCOTB_TEST_MODULES=test_devkit`.
+
+| test | what it proves |
+|---|---|
+| test_devkit_s_stages | the v1 stages S1–S3, S5 (12 trials), S6, S7 pass on TMAC2 |
+| test_devkit_flash_stages | F1 stops on QE = 0, then sets it; programming, F2 hand example, F3 random matvecs at every divider, F4's 50 MHz sample window equals the timing budget, F5 FSTOP/BIST; no pin is driven by both the RP2 and the chip |
+
 ## Running on Windows
 
 ```
