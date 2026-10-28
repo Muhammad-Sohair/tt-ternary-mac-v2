@@ -1,47 +1,41 @@
-# Session handoff — 2026-10-28
+# Session handoff — 2026-10-28 (v2)
 
-## Where things stand
+## Progress against the owner's dates (notes/v2_00)
 
-- **Design signed off, NOT submitted.** `tt_um_msohair_tmac`: 4×5 ternary MAC array, 24-bit saturating
-  accumulators, `sat16(acc >>> shift)` readout, SPI, BIST. 2x2 tiles, 50 MHz. Signed-off configuration = "V7";
-  `main` now holds it (fast-forwarded from `eval/4x5-acc24-v3b`).
-- Sign-off: 57.7 % utilisation, setup +5.69 ns / hold +0.107 ns worst-case, DRC/LVS/antenna 0. Residual:
-  1 data net 5 ps over the 0.75 ns max-slew limit at nom ss (11 pins / 2 data nets at max-wire ss), accepted
-  under the owner's rule (notes/04). Re-running V7 is byte-identical (deterministic flow).
-- Verification: RTL 9/9; gate level 9/9 on the signed-off netlist including the 24-bit saturation test
-  (local) and CI `gl_test`; mutation batch on the shipped RTL (results in notes/03).
-
-## Step 0 facts (verified 2026-10-27; re-check before acting)
-
-| item | value | source |
+| gate | date | status |
 |---|---|---|
-| next SKY shuttle | **TT SKY 26d**, closes **2026-11-30** | app.tinytapeout.com/shuttles |
-| chips expected / ship | 2027-05-12 / from 2027-06-09 | tinytapeout.com/chips |
-| tiles free on 26d | 70 of 512 (2026-10-27) | shuttle status page |
-| price | 70 €/tile (so 280 € for 2x2); devkit 300 € or 100 € individual early-bird (limited); shipping 15 € | app.tinytapeout.com/calculator |
-| Pakistan shipping | **[UNKNOWN]**: not listed as sanctioned in the terms (§6.2); no positive shipping list found. Ask TT before paying. | tinytapeout.com/terms |
-| tile | 1x1 = 161.00 × 111.52 µm; 2x2 = 334.88 × 225.76 µm | tt-support-tools `tile_sizes.yaml` |
-| IO | 8 in, 8 out, 8 bidir; inputs 66 MHz, outputs 33 MHz, mux round trip ~20 ns | tinytapeout.com/specs |
+| A signed off (`signoff-a`) | 14 Nov 2026 | **Everything done except the owner's decision on two residuals.** Not tagged yet. |
+| B (8 rows, 3x2) may start | only if A signed off by 14 Nov | not started |
+| submit A, else v1 | 22 Nov 2026 | — |
+| shuttle closes | 30 Nov 2026 | — |
 
-## What needs YOU (nothing below was done)
+## Where A stands
 
-1. **Ask TT whether they ship to Pakistan** before paying anything.
-2. **Submission and payment** at app.tinytapeout.com (account + payment are yours to do): 2x2 tiles = 280 €,
-   plus a devkit if wanted. Deadline 2026-11-30.
-3. Review the residual-slew acceptance in notes/04 once more before submitting.
+- Repo **github.com/Muhammad-Sohair/tt-ternary-mac-v2** (public), `main` = A with
+  `GRT_DESIGN_REPAIR_MAX_SLEW_PCT` 55. Local clone `E:\extras\portfolio\ternary-silicon\v2`, branch `v2-dev`
+  tracks `origin/main`. v1 untouched in `..\v1`.
+- RTL 14/14, gate level 14/14 (incl. slow test), mutation 10/10 with a passing control.
+- 2x2, 63.8 % util, setup +4.88 ns, hold +0.103 ns, DRC/LVS/antenna 0, precheck passes. Re-run reproduces
+  0/318 metrics and the same GDS (timestamps masked).
+- **Residuals needing the owner's decision** (notes/v2_03): (1) one data net +50.5 ps over max-slew at
+  max_ss only, 0 at nom_ss; (2) max fanout 16 on the clock root `clkbuf_16` (our own limit is 8; its slew is
+  0.294 ns vs 0.75 ns) and 9 on one data buffer.
+- Evidence branches `eval/a-grt55`, `eval/a-nonor21`, `eval/a-3x2`: keep (notes/v2_03 cites them).
+  3x2 was worse (16/20 slew pins), so more tiles do not help.
 
-## Repo map
+## Next
 
-- `src/` RTL · `test/` model + cocotb · `devkit/` MicroPython bring-up (syntax-checked only: no board
-  available to run it) · `notes/01-05` the full story · `practice/counter/` Step 1.
-- Branches: `eval/*` hold the evidence runs (keep; notes/04 cites them). Tag `acc24-shift-ref` = 4×10
-  24-bit reference. Local worktrees `../tt-ternary-mac-{3x2,v2,v3b,v4b}` can be removed with
-  `git worktree remove` once you no longer need them.
+1. Owner decides on the residuals. If accepted: tag `signoff-a` on `main`, freeze.
+2. If A is signed off by 14 Nov: B on its own branch (A + 8 rows, 3x2), same standard, by 22 Nov.
+3. C: only the two datasheet checks for the v3 plan (flash quad-read timing is already done in v2_02;
+   PSRAM APS6404L CS-low limit still open).
+4. Devkit bring-up script for the flash path (`devkit/`) is not written yet.
 
-## Gotchas learned
+## Gotchas learned this session
 
-- LibreLane area ≈ 1.55 × local YoWASP-Yosys (`_2` cells + repair). Use that factor for sizing.
-- The TT flow reports max-slew but never fails on it (`MAX_SLEW_VIOLATION_CORNERS = [""]`).
-- `DESIGN_REPAIR_MAX_SLEW_PCT` 60 made OpenROAD use 14 GiB and crash on the GitHub runner; 50 is OK.
-- `gh run download` of GDS_logs is ~hundreds of MB; run it in the background.
-- YoWASP Yosys only sees the current folder (WASI sandbox); keep the scripts and the .lib in `.syn/`.
+- A mutation harness needs a no-mutation control: without it, a broken build counts as "caught".
+- cocotb's Makefile uses `$(PWD)`: a subprocess must get `PWD` = the test dir with forward slashes.
+- A testbench model that takes its first value-change as the baseline misses that change.
+- LibreLane's post-GRT repair can *downsize* a gate to fix its input net; with a 40 % margin the GRT
+  estimate can hide a post-DRT slew violation. 55 % stopped it here.
+- GDS files differ run to run only in BGNLIB/BGNSTR timestamps; mask them to compare.
