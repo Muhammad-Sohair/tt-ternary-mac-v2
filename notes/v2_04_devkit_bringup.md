@@ -59,8 +59,9 @@ the stage can tell a good sample point from a bad one.
 1. **Stage state leaked between stages (also in v1's script).** S5–S7 compared against a fresh model, but
    S2's BIST leaves DONE/PASS set in the status byte, and S5's last `SHIFT` stays in force for S6/S7
    (`CLEAR` resets neither). On silicon, S5–S7 would have reported failures on a working chip. Fix: reset
-   the chip before every stage. **The v1 devkit script (`v1/devkit/tmac_bringup.py`) has the same bug; v1
-   is frozen, so it is not fixed there.** If v1 is submitted, apply the same two-line fix.
+   the chip before every stage. The v1 devkit script had the same bug; on the owner's instruction it is fixed
+   in the v1 repo (commit fee5df7, after `signoff-v7`, script only), and the same harness run on the v1 RTL
+   shows it: unfixed S5 200/200 trials, S6 and S7 fail on status 0xb1 vs 0x81; fixed, S1–S7 pass.
 2. **F4 erased F2's image.** `fl_write` erases whole 4 KB sectors, and F4's image was in the same sector as
    F2's, so F5 (which reuses F2's image) read erased bytes. Fix: one sector per stage.
 3. A harness bug, not a script bug: my first `W25Q` model served read data before the last address byte

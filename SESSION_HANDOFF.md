@@ -25,8 +25,8 @@
 
 1. B (`b-dev`): read the 3x2 run; then timing/slew to A's standard, gate level incl. slow test, a new
    mutation batch with a control (qspi_fetch changed), docs. Deadline 22 Nov, else submit A.
-2. **v1's devkit script has the state-leak bug** the RTL harness found (S5–S7 compare against a fresh model
-   after S2's BIST and S5's SHIFT). v1 is frozen; if v1 is ever submitted, add a reset before each stage.
+2. v1's devkit script state-leak bug: **fixed 29 Oct** in the v1 repo (fee5df7, after `signoff-v7`, script
+   only); the v1 RTL harness reproduces the failure unfixed and passes S1–S7 fixed.
 3. C: only the PSRAM APS6404L CS-low limit datasheet check for the v3 plan.
 
 ## Gotchas learned this session
