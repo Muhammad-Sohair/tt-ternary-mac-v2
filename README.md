@@ -1,27 +1,26 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg)
 
-# TMAC: a ternary (1.58-bit) MAC array for Tiny Tapeout SKY130
+# TMAC2: a ternary (1.58-bit) MAC array that streams its weights from QSPI flash
 
-A 4 × 5 array of multiplier-free ternary processing elements, hardened for the Tiny Tapeout **SKY 26d**
-shuttle (SkyWater 130 nm, 2x2 tiles). It carries an FPGA BitNet-style accelerator
-([LLM-on-a-FPGA](https://github.com/Muhammad-Sohair/LLM-on-a-FPGA), 512 PEs on a Zynq-7020) onto silicon:
-the same base-3 weight packing (5 trits per byte), the same add/subtract/pass PE, and the same
-`sat16(acc >>> shift)` requantisation contract. All of it was rewritten for an ASIC flow, with no FPGA
-primitives.
+Version 2 of [tt-ternary-mac](https://github.com/Muhammad-Sohair/tt-ternary-mac) for the Tiny Tapeout
+**SKY 26d** shuttle (SkyWater 130 nm). The v1 datapath is unchanged: a 4 × 5 array of multiplier-free
+ternary PEs with the FPGA's base-3 weight packing and `sat16(acc >>> shift)` requantisation
+([LLM-on-a-FPGA](https://github.com/Muhammad-Sohair/LLM-on-a-FPGA)). New in v2: a QSPI master that reads
+packed weights straight from the TT QSPI Pmod's W25Q128JV flash, so a whole weight matrix (all of
+TriLM-99M's ternary weights fit in the 16 MB flash) streams through the array while the host only sends
+activations. Every v1 command still works, so without the flash the chip behaves exactly like v1.
 
-**Status:** designed, verified and signed off; **not yet submitted** to the shuttle. The datasheet is in
-[docs/info.md](docs/info.md).
+**Status:** RTL verified (14/14 cocotb tests); hardening in progress. Sign-off rules and dates:
+[notes/v2_00](notes/v2_00_plan_and_rules.md). Not submitted. The datasheet is in [docs/info.md](docs/info.md).
 
-## Sign-off summary (LibreLane 3.0.14, sky130A, 50 MHz, 9 PVT/RC corners)
+## v2 notes
 
-| | |
-|---|---|
-| utilisation | 57.7 % of a 2x2 tile (41,866 µm² std cells) |
-| setup / hold WNS | **+5.69 ns** (worst, ss/100 °C/1.6 V) / **+0.107 ns** (ff/−40 °C) |
-| DRC / LVS / antenna | 0 / 0 / 0 |
-| max-slew | 1 data net 5 ps over 0.75 ns at nom ss: documented in [notes/04](notes/04_signoff.md), not suppressed |
-| verification | bit-exact Python model; 9 cocotb tests in RTL **and gate level**; all 256 weight bytes; mutation-tested |
-| reproducibility | re-running the signed-off configuration gives a byte-identical netlist (0/312 metrics differ) |
+- [v2_00 plan and rules](notes/v2_00_plan_and_rules.md): the owner's go/no-go rules and the progress log.
+- [v2_01 spec](notes/v2_01_spec.md): options A/B/C, two corrections to earlier estimates.
+- [v2_02 flash timing](notes/v2_02_flash_timing.md): the W25Q128JV quad-read timing, verified against the
+  datasheet before any RTL, and why the sample point is programmable.
+
+The v1 sign-off numbers and notes below describe the v1 chip (tag `signoff-v7`), kept for the history.
 
 ## How the design works
 
